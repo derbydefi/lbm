@@ -9,14 +9,16 @@
             position: absolute;
             top: 10px;
             left: 10px;
-            background: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.8);
             padding: 10px;
             border-radius: 5px;
             font-family: Arial, sans-serif;
             font-size: 14px;
             color: #333;
             z-index: 10;
-            max-width: 200px;
+            width: 250px; /* Set a fixed width */
+            max-height: 80vh; /* Limit maximum height */
+            overflow-y: auto;
         }
         #settings h2 {
             margin-top: 0;
@@ -33,6 +35,57 @@
             width: 100%;
             margin-top: 5px;
         }
+        #toggleSettings {
+            background: rgba(255,255,255,0.8);
+            border: none;
+            border-radius: 5px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            color: #333;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        #helpModal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80vw;
+            max-width: 600px;
+            background: rgba(255,255,255,0.95);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 20;
+            overflow-y: auto;
+            max-height: 80vh;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        #helpModal h3 {
+            margin-top: 0;
+        }
+        #helpOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 15;
+        }
+        #closeHelp {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #ccc;
+            border: none;
+            border-radius: 5px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
         #canvas {
             display: block;
         }
@@ -41,6 +94,7 @@
 <body>
     <canvas id="canvas"></canvas>
     <div id="settings">
+        <button id="toggleSettings">Hide Settings</button>
         <h2>Simulation Settings</h2>
         <label>
             Viscosity:
@@ -51,19 +105,54 @@
             <input type="range" id="forceStrength" min="0.1" max="1.0" step="0.1" value="0.5">
         </label>
         <label>
+            Brush Size:
+            <input type="range" id="brushSize" min="1" max="10" step="1" value="3">
+        </label>
+        <label>
+            Obstacle Brush Size:
+            <input type="range" id="obstacleBrushSize" min=".1" max="10" step="1" value="1">
+        </label>
+        <label>
             Cell Size:
             <input type="range" id="cellSize" min="2" max="10" step="1" value="4">
         </label>
         <label>
-            Color Scheme:
-            <select id="colorScheme">
-                <option value="velocity">Velocity</option>
-                <option value="density">Density</option>
-            </select>
+            Vector Field Spacing:
+            <input type="range" id="vectorSpacing" min="5" max="50" step="1" value="15">
         </label>
+        <label>Visualizations:</label>
+        <label><input type="checkbox" id="visualization-velocity" checked> Velocity</label>
+        <label><input type="checkbox" id="visualization-density"> Density</label>
+        <label><input type="checkbox" id="visualization-pressure"> Pressure</label>
+        <label><input type="checkbox" id="visualization-vorticity"> Vorticity</label>
+        <label><input type="checkbox" id="visualization-vectorField"> Vector Field</label>
         <button id="reset">Reset Simulation</button>
         <button id="clearObstacles">Clear Obstacles</button>
         <button id="pauseResume">Pause Simulation</button>
+        <button id="helpButton">Help</button>
+    </div>
+    <div id="helpOverlay"></div>
+    <div id="helpModal">
+        <button id="closeHelp">Close</button>
+        <h3>Help</h3>
+        <p>This is a Lattice Boltzmann fluid simulation.</p>
+        <p><strong>Controls:</strong></p>
+        <ul>
+            <li><strong>Left Click:</strong> Apply force to the fluid.</li>
+            <li><strong>Right Click:</strong> Draw obstacles.</li>
+            <li>Use the sliders to adjust simulation parameters.</li>
+        </ul>
+        <p><strong>Visualization Options:</strong></p>
+        <ul>
+            <li>Select different properties to visualize, such as velocity, density, pressure, and vorticity.</li>
+            <li>Adjust the vector field spacing using the slider.</li>
+        </ul>
+        <p><strong>Notes:</strong></p>
+        <ul>
+            <li>Adjust the cell size for better performance or higher resolution.</li>
+            <li>Increasing viscosity will make the fluid flow more slowly.</li>
+            <li>Decreasing/Increasing the window size of the browser will effect performance; use a smaller window if its too laggy.</li>
+        </ul>
     </div>
     <script src="index.js"></script>
 </body>
