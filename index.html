@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lattice Boltzmann Fluid Simulation</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #settings {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.9);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            color: #333;
+            z-index: 10;
+            max-width: 200px;
+        }
+        #settings h2 {
+            margin-top: 0;
+        }
+        #settings label {
+            display: block;
+            margin-bottom: 10px;
+        }
+        #settings input[type=range],
+        #settings select {
+            width: 100%;
+        }
+        #settings button {
+            width: 100%;
+            margin-top: 5px;
+        }
+        #canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="settings">
+        <h2>Simulation Settings</h2>
+        <label>
+            Viscosity:
+            <input type="range" id="viscosity" min="0.6" max="1.8" step="0.1" value="1.0">
+        </label>
+        <label>
+            Force Strength:
+            <input type="range" id="forceStrength" min="0.1" max="1.0" step="0.1" value="0.5">
+        </label>
+        <label>
+            Cell Size:
+            <input type="range" id="cellSize" min="2" max="10" step="1" value="4">
+        </label>
+        <label>
+            Color Scheme:
+            <select id="colorScheme">
+                <option value="velocity">Velocity</option>
+                <option value="density">Density</option>
+            </select>
+        </label>
+        <button id="reset">Reset Simulation</button>
+        <button id="clearObstacles">Clear Obstacles</button>
+        <button id="pauseResume">Pause Simulation</button>
+    </div>
+    <script src="index.js"></script>
+</body>
+</html>
