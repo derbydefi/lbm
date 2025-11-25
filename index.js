@@ -1,676 +1,436 @@
-// Constants for the D2Q9 model
-const c = [
-	{ x: 0, y: 0 }, // Rest particle
-	{ x: 1, y: 0 }, // East
-	{ x: 0, y: 1 }, // North
-	{ x: -1, y: 0 }, // West
-	{ x: 0, y: -1 }, // South
-	{ x: 1, y: 1 }, // Northeast
-	{ x: -1, y: 1 }, // Northwest
-	{ x: -1, y: -1 }, // Southwest
-	{ x: 1, y: -1 }, // Southeast
+// D2Q9 Lattice Boltzmann Fluid Simulation
+
+
+const C = [
+  [0, 0], [1, 0], [0, 1], [-1, 0], [0, -1],
+  [1, 1], [-1, 1], [-1, -1], [1, -1]
 ];
 
-const w = [
-	// Weights for the equilibrium distribution
-	4 / 9, // Rest particle
-	1 / 9, // East, North, West, South
-	1 / 9,
-	1 / 9,
-	1 / 9,
-	1 / 36, // Diagonal directions
-	1 / 36,
-	1 / 36,
-	1 / 36,
+const OPPOSITE = [0, 3, 4, 1, 2, 7, 8, 5, 6];
+
+const W = [
+  4/9, 1/9, 1/9, 1/9, 1/9,
+  1/36, 1/36, 1/36, 1/36
 ];
 
-let canvas = document.getElementById("canvas");
-// Set willReadFrequently to true for performance optimization
-let ctx = canvas.getContext("2d", { willReadFrequently: true });
+// Canvas setup
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: false });
 
-// Initialize simulation parameters
-let cellSize = parseInt(document.getElementById("cellSize").value);
-let cols = Math.floor(window.innerWidth / cellSize);
-let rows = Math.floor(window.innerHeight / cellSize);
+// Simulation parameters (will be updated from UI)
+let cellSize = 4;
+let cols, rows;
+let tau = 1.0;
+let omega = 1 / tau;
+let forceStrength = 0.5;
+let brushRadius = 3;
+let obstacleBrushRadius = 1;
+let vectorSpacing = 15;
 
-canvas.width = cols * cellSize;
-canvas.height = rows * cellSize;
+// Grids: two alternating F grids + obstacle mask
+let f0, f1; // Current and next distribution functions
+let obstacle;
+let isCurrentF0 = true;
 
-let tau = parseFloat(document.getElementById("viscosity").value); // Relaxation time
-let forceStrength = parseFloat(document.getElementById("forceStrength").value); // Force applied
-let brushRadius = parseInt(document.getElementById("brushSize").value);
-let obstacleBrushRadius = parseInt(
-	document.getElementById("obstacleBrushSize").value
-);
-let vectorSpacing = parseInt(document.getElementById("vectorSpacing").value);
+// Mouse state
+let mouse = { x: 0, y: 0, down: false, rightDown: false };
+let prevMouseGrid = null;
 
-function getSelectedVisualizations() {
-	let schemes = [];
-	if (document.getElementById("visualization-velocity").checked)
-		schemes.push("velocity");
-	if (document.getElementById("visualization-density").checked)
-		schemes.push("density");
-	if (document.getElementById("visualization-pressure").checked)
-		schemes.push("pressure");
-	if (document.getElementById("visualization-vorticity").checked)
-		schemes.push("vorticity");
-	if (document.getElementById("visualization-vectorField").checked)
-		schemes.push("vectorField");
-	return schemes;
-}
+// Visualization
+let visualizations = new Set(["velocity"]);
 
-function updateColorScheme() {
-	colorScheme = getSelectedVisualizations();
-}
-
-// Initialize colorScheme
-let colorScheme = getSelectedVisualizations();
-
-// Add event listeners to checkboxes
-document
-	.getElementById("visualization-velocity")
-	.addEventListener("change", updateColorScheme);
-document
-	.getElementById("visualization-density")
-	.addEventListener("change", updateColorScheme);
-document
-	.getElementById("visualization-pressure")
-	.addEventListener("change", updateColorScheme);
-document
-	.getElementById("visualization-vorticity")
-	.addEventListener("change", updateColorScheme);
-document
-	.getElementById("visualization-vectorField")
-	.addEventListener("change", updateColorScheme);
-
-let grid = createGrid(cols, rows);
-let tempGrid = createGrid(cols, rows);
+// UI Elements
+const ui = {
+  viscosity: document.getElementById("viscosity"),
+  forceStrength: document.getElementById("forceStrength"),
+  brushSize: document.getElementById("brushSize"),
+  obstacleBrushSize: document.getElementById("obstacleBrushSize"),
+  cellSize: document.getElementById("cellSize"),
+  vectorSpacing: document.getElementById("vectorSpacing"),
+  pauseResume: document.getElementById("pauseResume")
+};
 
 let isPaused = false;
 
-let obstacles = createObstacleGrid(cols, rows);
+// Initialize or resize simulation
+function initSimulation() {
+  cellSize = parseInt(ui.cellSize.value);
+  cols = Math.floor(canvas.clientWidth / cellSize);
+  rows = Math.floor(canvas.clientHeight / cellSize);
 
-let prevMouseX = null;
-let prevMouseY = null;
+  canvas.width = cols * cellSize;
+  canvas.height = rows * cellSize;
 
-let isLeftMouseDown = false;
-let isRightMouseDown = false;
-let applyForce = false; // Declare applyForce in the global scope
-let mouseX = 0;
-let mouseY = 0;
+  // Create flat typed arrays for maximum performance
+  const size = cols * rows * 9;
+  f0 = new Float32Array(size);
+  f1 = new Float32Array(size);
+  obstacle = new Uint8Array(cols * rows);
 
-canvas.addEventListener("mousedown", (e) => {
-	if (e.button === 0) {
-		isLeftMouseDown = true;
-		applyForce = true;
-		handleMouse(e);
-	} else if (e.button === 2) {
-		isRightMouseDown = true;
-		applyForce = false;
-		handleMouse(e);
-	}
-});
+  // Initialize to equilibrium (rho=1, u=0)
+  for (let i = 0; i < cols * rows; i++) {
+    for (let k = 0; k < 9; k++) {
+      f0[i * 9 + k] = W[k];
+    }
+  }
 
-canvas.addEventListener("mouseup", (e) => {
-	if (e.button === 0) {
-		isLeftMouseDown = false;
-		applyForce = false;
-	} else if (e.button === 2) {
-		isRightMouseDown = false;
-	}
-	prevMouseX = null;
-	prevMouseY = null;
-});
-
-canvas.addEventListener("mousemove", handleMouse);
-
-// Prevent context menu on right-click
-canvas.addEventListener("contextmenu", function (e) {
-	e.preventDefault();
-});
-
-document.getElementById("viscosity").addEventListener("input", (e) => {
-	tau = parseFloat(e.target.value);
-});
-document.getElementById("forceStrength").addEventListener("input", (e) => {
-	forceStrength = parseFloat(e.target.value);
-});
-document.getElementById("brushSize").addEventListener("input", (e) => {
-	brushRadius = parseInt(e.target.value);
-});
-document.getElementById("obstacleBrushSize").addEventListener("input", (e) => {
-	obstacleBrushRadius = parseInt(e.target.value);
-});
-document.getElementById("vectorSpacing").addEventListener("input", (e) => {
-	vectorSpacing = parseInt(e.target.value);
-});
-document.getElementById("cellSize").addEventListener("input", (e) => {
-	cellSize = parseInt(e.target.value);
-	resizeSimulation();
-});
-document.getElementById("reset").addEventListener("click", resetSimulation);
-document
-	.getElementById("clearObstacles")
-	.addEventListener("click", clearObstacles);
-document.getElementById("pauseResume").addEventListener("click", () => {
-	isPaused = !isPaused;
-	document.getElementById("pauseResume").textContent = isPaused
-		? "Resume Simulation"
-		: "Pause Simulation";
-});
-
-// Add event listener for the settings toggle button
-document.getElementById("toggleSettings").addEventListener("click", () => {
-	const settingsPanel = document.getElementById("settings");
-	const toggleButton = document.getElementById("toggleSettings");
-
-	if (
-		settingsPanel.style.display === "none" ||
-		settingsPanel.style.display === ""
-	) {
-		settingsPanel.style.display = "block";
-		toggleButton.textContent = "Hide Settings";
-		// Remove the 'Show Settings' button if it exists
-		const showButton = document.getElementById("showSettings");
-		if (showButton) {
-			showButton.remove();
-		}
-	} else {
-		settingsPanel.style.display = "none";
-		// Create a small button to bring back the settings panel
-		createShowSettingsButton();
-	}
-});
-
-function createShowSettingsButton() {
-	const existingButton = document.getElementById("showSettings");
-	if (existingButton) return; // If button already exists, do nothing
-
-	const showButton = document.createElement("button");
-	showButton.id = "showSettings";
-	showButton.textContent = "Show Settings";
-	showButton.style.position = "absolute";
-	showButton.style.top = "10px";
-	showButton.style.left = "10px";
-	showButton.style.background = "rgba(255,255,255,0.8)";
-	showButton.style.border = "none";
-	showButton.style.borderRadius = "5px";
-	showButton.style.padding = "5px 10px";
-	showButton.style.cursor = "pointer";
-	showButton.style.zIndex = "11";
-	showButton.style.fontFamily = "Arial, sans-serif";
-	showButton.style.fontSize = "14px";
-	showButton.style.color = "#333";
-
-	showButton.addEventListener("click", () => {
-		const settingsPanel = document.getElementById("settings");
-		const toggleButton = document.getElementById("toggleSettings");
-		settingsPanel.style.display = "block";
-		toggleButton.textContent = "Hide Settings";
-		showButton.remove();
-	});
-
-	document.body.appendChild(showButton);
+  prevMouseGrid = null;
+  console.log(`Simulation initialized: ${cols}×${rows} cells`);
 }
 
-// Remove any existing showSettings button on page load
-document.addEventListener("DOMContentLoaded", () => {
-	const showButton = document.getElementById("showSettings");
-	if (showButton) {
-		showButton.remove();
-	}
-});
-
-// Add event listener for help button
-document.getElementById("helpButton").addEventListener("click", () => {
-	let helpModal = document.getElementById("helpModal");
-	let helpOverlay = document.getElementById("helpOverlay");
-	helpModal.style.display = "block";
-	helpOverlay.style.display = "block";
-});
-
-// Add event listener for close help button
-document.getElementById("closeHelp").addEventListener("click", () => {
-	let helpModal = document.getElementById("helpModal");
-	let helpOverlay = document.getElementById("helpOverlay");
-	helpModal.style.display = "none";
-	helpOverlay.style.display = "none";
-});
-
-// Close help modal when clicking outside of it
-document.getElementById("helpOverlay").addEventListener("click", () => {
-	let helpModal = document.getElementById("helpModal");
-	let helpOverlay = document.getElementById("helpOverlay");
-	helpModal.style.display = "none";
-	helpOverlay.style.display = "none";
-});
-
-function createGrid(cols, rows) {
-	let arr = new Array(cols);
-	for (let x = 0; x < cols; x++) {
-		arr[x] = new Array(rows);
-		for (let y = 0; y < rows; y++) {
-			// Each cell has 9 distribution functions
-			arr[x][y] = {
-				f: new Float32Array(9),
-				rho: 1.0, // Density
-				ux: 0.0, // x-velocity
-				uy: 0.0, // y-velocity
-			};
-			// Initialize distribution functions to equilibrium
-			for (let i = 0; i < 9; i++) {
-				arr[x][y].f[i] = w[i];
-			}
-		}
-	}
-	return arr;
+function idx(x, y, k = 0) {
+  return ((x * rows) + y) * 9 + k;
 }
 
-function createObstacleGrid(cols, rows) {
-	let arr = new Array(cols);
-	for (let x = 0; x < cols; x++) {
-		arr[x] = new Uint8Array(rows);
-	}
-	return arr;
-}
-
-function resetSimulation() {
-	grid = createGrid(cols, rows);
-	tempGrid = createGrid(cols, rows);
-}
-
-function clearObstacles() {
-	obstacles = createObstacleGrid(cols, rows);
-}
-
-function resizeSimulation() {
-	cols = Math.floor(window.innerWidth / cellSize);
-	rows = Math.floor(window.innerHeight / cellSize);
-	canvas.width = cols * cellSize;
-	canvas.height = rows * cellSize;
-	resetSimulation();
-	obstacles = createObstacleGrid(cols, rows);
-}
-
-function handleMouse(e) {
-	const rect = canvas.getBoundingClientRect();
-	const x = Math.floor((e.clientX - rect.left) / cellSize);
-	const y = Math.floor((e.clientY - rect.top) / cellSize);
-
-	if (x >= 0 && x < cols && y >= 0 && y < rows) {
-		if (isLeftMouseDown) {
-			// Left click: apply force
-			mouseX = x;
-			mouseY = y;
-		} else if (isRightMouseDown) {
-			// Right click: create obstacle line
-			if (prevMouseX !== null && prevMouseY !== null) {
-				drawLine(prevMouseX, prevMouseY, x, y);
-			} else {
-				setObstacleAt(x, y);
-			}
-			prevMouseX = x;
-			prevMouseY = y;
-		}
-	}
-}
-
-function setObstacleAt(x, y) {
-	for (let dx = -obstacleBrushRadius; dx <= obstacleBrushRadius; dx++) {
-		for (let dy = -obstacleBrushRadius; dy <= obstacleBrushRadius; dy++) {
-			let nx = x + dx;
-			let ny = y + dy;
-			if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
-				if (dx * dx + dy * dy <= obstacleBrushRadius * obstacleBrushRadius) {
-					obstacles[nx][ny] = 1;
-				}
-			}
-		}
-	}
-}
-
-function drawLine(x0, y0, x1, y1) {
-	let dx = Math.abs(x1 - x0);
-	let dy = -Math.abs(y1 - y0);
-	let sx = x0 < x1 ? 1 : -1;
-	let sy = y0 < y1 ? 1 : -1;
-	let err = dx + dy;
-	while (true) {
-		if (x0 >= 0 && x0 < cols && y0 >= 0 && y0 < rows) {
-			setObstacleAt(x0, y0);
-		}
-		if (x0 === x1 && y0 === y1) break;
-		let e2 = 2 * err;
-		if (e2 >= dy) {
-			err += dy;
-			x0 += sx;
-		}
-		if (e2 <= dx) {
-			err += dx;
-			y0 += sy;
-		}
-	}
-}
-
-function equilibrium(rho, ux, uy) {
-	let feq = new Float32Array(9);
-	let usqr = 1.5 * (ux * ux + uy * uy);
-	for (let i = 0; i < 9; i++) {
-		let cu = 3 * (c[i].x * ux + c[i].y * uy);
-		feq[i] = w[i] * rho * (1 + cu + 0.5 * cu * cu - usqr);
-	}
-	return feq;
-}
-
-function oppositeDirection(i) {
-	const opposite = [0, 3, 4, 1, 2, 7, 8, 5, 6];
-	return opposite[i];
-}
-
-function collideAndStream() {
-	// Prepare arrays to store vorticity and pressure
-	let vorticityGrid = new Array(cols);
-	let pressureGrid = new Array(cols);
-	for (let x = 0; x < cols; x++) {
-		vorticityGrid[x] = new Float32Array(rows);
-		pressureGrid[x] = new Float32Array(rows);
-	}
-
-	// Collision and streaming combined for optimization
-	for (let x = 0; x < cols; x++) {
-		for (let y = 0; y < rows; y++) {
-			let cell = grid[x][y];
-
-			if (obstacles[x][y]) {
-				// For obstacles, enforce no-slip condition
-				for (let i = 0; i < 9; i++) {
-					cell.f[i] = grid[x][y].f[oppositeDirection(i)];
-				}
-				continue;
-			}
-
-			let rho = 0;
-			let ux = 0;
-			let uy = 0;
-
-			// Compute macroscopic variables
-			for (let i = 0; i < 9; i++) {
-				let fi = cell.f[i];
-				rho += fi;
-				ux += fi * c[i].x;
-				uy += fi * c[i].y;
-			}
-
-			// Apply external force if mouse is down
-			if (applyForce) {
-				let dx = x - mouseX;
-				let dy = y - mouseY;
-				if (dx * dx + dy * dy <= brushRadius * brushRadius) {
-					let distance = Math.sqrt(dx * dx + dy * dy);
-					let factor = 1 - distance / brushRadius;
-					factor = Math.max(factor, 0); // Ensure factor is non-negative
-					ux += (forceStrength * factor) / rho;
-					uy += (forceStrength * factor) / rho;
-				}
-			}
-
-			cell.rho = rho;
-			cell.ux = ux / rho;
-			cell.uy = uy / rho;
-
-			// Cap velocities to prevent numerical instability
-			let maxVelocity = 0.1;
-			cell.ux = Math.max(Math.min(cell.ux, maxVelocity), -maxVelocity);
-			cell.uy = Math.max(Math.min(cell.uy, maxVelocity), -maxVelocity);
-
-			// Cap density to prevent numerical issues
-			let minDensity = 0.9;
-			let maxDensity = 1.1;
-			cell.rho = Math.max(Math.min(cell.rho, maxDensity), minDensity);
-
-			// Collision step
-			let feq = equilibrium(cell.rho, cell.ux, cell.uy);
-			for (let i = 0; i < 9; i++) {
-				cell.f[i] += -(cell.f[i] - feq[i]) / tau;
-			}
-
-			// Streaming step
-			for (let i = 0; i < 9; i++) {
-				let nx = (x + c[i].x + cols) % cols;
-				let ny = (y + c[i].y + rows) % rows;
-
-				if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
-					if (obstacles[nx][ny]) {
-						// Bounce-back boundary condition
-						tempGrid[x][y].f[i] = cell.f[oppositeDirection(i)];
-					} else {
-						tempGrid[nx][ny].f[i] = cell.f[i];
-					}
-				}
-			}
-		}
-	}
-
-	// Compute vorticity (after velocities are updated)
-	for (let x = 1; x < cols - 1; x++) {
-		for (let y = 1; y < rows - 1; y++) {
-			if (obstacles[x][y]) continue;
-			let du_dy = (grid[x][y + 1].ux - grid[x][y - 1].ux) / 2;
-			let dv_dx = (grid[x + 1][y].uy - grid[x - 1][y].uy) / 2;
-			vorticityGrid[x][y] = dv_dx - du_dy;
-		}
-	}
-
-	// Compute pressure as gradient of density
-	for (let x = 1; x < cols - 1; x++) {
-		for (let y = 1; y < rows - 1; y++) {
-			if (obstacles[x][y]) continue;
-			let drho_dx = (grid[x + 1][y].rho - grid[x - 1][y].rho) / 2;
-			let drho_dy = (grid[x][y + 1].rho - grid[x][y - 1].rho) / 2;
-			pressureGrid[x][y] = Math.sqrt(drho_dx * drho_dx + drho_dy * drho_dy);
-		}
-	}
-
-	// Swap grids
-	let temp = grid;
-	grid = tempGrid;
-	tempGrid = temp;
-
-	draw(vorticityGrid, pressureGrid);
-}
-
-function draw(vorticityGrid, pressureGrid) {
-	// Clear the canvas
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-	let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-	let data = imageData.data;
-
-	for (let x = 0; x < cols; x++) {
-		for (let y = 0; y < rows; y++) {
-			let cellIndex = (y * cellSize * canvas.width + x * cellSize) * 4;
-
-			if (obstacles[x][y]) {
-				// Obstacle color (e.g., dark gray)
-				fillCell(data, x, y, cellSize, [50, 50, 50, 255]);
-			} else {
-				let cell = grid[x][y];
-				let colors = [];
-
-				// Iterate over selected color schemes
-				colorScheme.forEach((scheme) => {
-					let value, color;
-					if (scheme === "velocity") {
-						let speed = Math.sqrt(cell.ux * cell.ux + cell.uy * cell.uy);
-						value = Math.min(speed * 50, 1); // Adjusted scaling factor
-						value = Math.sqrt(value); // Non-linear scaling for smoother transitions
-						color = hsvToRgb(((1 - value) * 240) / 360, 1, value);
-					} else if (scheme === "density") {
-						value = cell.rho - 1;
-						value =
-							value > 0 ? Math.min(value * 500, 1) : Math.max(value * 500, -1);
-						if (value >= 0) {
-							// High density - shades of red
-							color = hsvToRgb(0, 1, value);
-						} else {
-							// Low density - shades of blue
-							color = hsvToRgb(240 / 360, 1, -value);
-						}
-					} else if (scheme === "pressure") {
-						value = pressureGrid[x][y];
-						value = Math.min(value * 5000, 1); // Adjusted scaling factor
-						color = hsvToRgb(((1 - value) * 240) / 360, 1, value);
-					} else if (scheme === "vorticity") {
-						value = Math.min(Math.abs(vorticityGrid[x][y]) * 50, 1);
-						if (vorticityGrid[x][y] > 0) {
-							// Positive vorticity - red
-							color = [Math.round(255 * value), 0, 0];
-						} else {
-							// Negative vorticity - blue
-							color = [0, 0, Math.round(255 * value)];
-						}
-					}
-					// Exclude vectorField from color calculations
-					if (
-						["velocity", "density", "pressure", "vorticity"].includes(scheme)
-					) {
-						colors.push(color);
-					}
-				});
-
-				// Combine colors (average)
-				if (colors.length > 0) {
-					let finalColor = colors.reduce(
-						(acc, color) => {
-							return acc.map((val, idx) => val + color[idx] / colors.length);
-						},
-						[0, 0, 0]
-					);
-
-					fillCell(data, x, y, cellSize, [...finalColor, 255]);
-				}
-			}
-		}
-	}
-
-	ctx.putImageData(imageData, 0, 0);
-
-	// Draw vector field
-	if (colorScheme.includes("vectorField")) {
-		drawVectorField();
-	}
-}
-
-function fillCell(data, x, y, size, color) {
-	for (let dx = 0; dx < size; dx++) {
-		for (let dy = 0; dy < size; dy++) {
-			let idx = ((y * size + dy) * canvas.width + (x * size + dx)) * 4;
-			data[idx] = color[0];
-			data[idx + 1] = color[1];
-			data[idx + 2] = color[2];
-			data[idx + 3] = color[3];
-		}
-	}
-}
-
+// HSV to RGB
 function hsvToRgb(h, s, v) {
-	let r, g, b;
-	let i = Math.floor(h * 6);
-	let f = h * 6 - i;
-	let p = v * (1 - s);
-	let q = v * (1 - f * s);
-	let t = v * (1 - (1 - f) * s);
-	switch (i % 6) {
-		case 0:
-			r = v;
-			g = t;
-			b = p;
-			break;
-		case 1:
-			r = q;
-			g = v;
-			b = p;
-			break;
-		case 2:
-			r = p;
-			g = v;
-			b = t;
-			break;
-		case 3:
-			r = p;
-			g = q;
-			b = v;
-			break;
-		case 4:
-			r = t;
-			g = p;
-			b = v;
-			break;
-		case 5:
-			r = v;
-			g = p;
-			b = q;
-			break;
-	}
-	return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    case 5: r = v; g = p; b = q; break;
+  }
+  return [r * 255, g * 255, b * 255];
 }
 
-function drawVectorField() {
-	ctx.strokeStyle = "white";
-	ctx.lineWidth = 1;
+// Main LBM step: Collision + Streaming (push scheme)
+function simulate() {
+  const fSrc = isCurrentF0 ? f0 : f1;
+  const fDst = isCurrentF0 ? f1 : f0;
 
-	for (let x = 0; x < cols; x += vectorSpacing) {
-		for (let y = 0; y < rows; y += vectorSpacing) {
-			if (obstacles[x][y]) continue;
+  let ux, uy, rho;
+  let feq = new Float32Array(9);
 
-			let cell = grid[x][y];
-			let startX = (x + 0.5) * cellSize;
-			let startY = (y + 0.5) * cellSize;
+  for (let x = 0; x < cols; x++) {
+    for (let y = 0; y < rows; y++) {
+      const cellIdx = idx(x, y);
+      const isObs = obstacle[x * rows + y];
 
-			let vx = cell.ux;
-			let vy = cell.uy;
+      if (isObs) {
+        // Bounce-back: reverse populations
+        for (let k = 0; k < 9; k++) {
+          fDst[cellIdx + k] = fSrc[cellIdx + OPPOSITE[k]];
+        }
+        continue;
+      }
 
-			let length = Math.sqrt(vx * vx + vy * vy);
-			if (length > 0) {
-				let scale = (cellSize * vectorSpacing * 0.4) / length; // Adjust scale
-				let endX = startX + vx * scale;
-				let endY = startY + vy * scale;
+      // 1. Compute macroscopic variables
+      rho = 0; ux = 0; uy = 0;
+      for (let k = 0; k < 9; k++) {
+        const fk = fSrc[cellIdx + k];
+        rho += fk;
+        ux += fk * C[k][0];
+        uy += fk * C[k][1];
+      }
+      ux /= rho;
+      uy /= rho;
 
-				drawArrow(startX, startY, endX, endY);
-			}
-		}
-	}
+      // 2. Apply localized force (Gaussian brush)
+      if (mouse.down) {
+        const dx = x - mouse.x;
+        const dy = y - mouse.y;
+        const dist2 = dx * dx + dy * dy;
+        const r2 = brushRadius * brushRadius;
+        if (dist2 < r2) {
+          const force = forceStrength * Math.exp(-dist2 / (r2 * 0.5));
+          ux += force * (mouse.vx || 0.02);  // default small rightward push
+          uy += force * (mouse.vy || 0);
+        }
+      }
+
+      // 3. Collision (BGK)
+      const ux2 = ux * ux;
+      const uy2 = uy * uy;
+      const u2 = ux2 + uy2;
+      const uxuy = ux * uy;
+
+      for (let k = 0; k < 9; k++) {
+        const ckx = C[k][0];
+        const cky = C[k][1];
+        const cu = ckx * ux + cky * uy;
+        const feq_k = W[k] * rho * (1 + 3 * cu + 4.5 * cu * cu - 1.5 * u2);
+        feq[k] = feq_k;
+        fSrc[cellIdx + k] = fSrc[cellIdx + k] * (1 - omega) + omega * feq_k;
+      }
+
+      // 4. Streaming (push to neighbors)
+      for (let k = 0; k < 9; k++) {
+        const nx = (x + C[k][0] + cols) % cols;
+        const ny = (y + C[k][1] + rows) % rows;
+        const ni = idx(nx, ny);
+        fDst[ni + k] = fSrc[cellIdx + k];
+      }
+    }
+  }
+
+  isCurrentF0 = !isCurrentF0;
 }
 
-function drawArrow(fromX, fromY, toX, toY) {
-	let headLength = 5; // Length of arrowhead
-	let angle = Math.atan2(toY - fromY, toX - fromX);
+// Render everything
+function render() {
+  const imageData = ctx.createImageData(canvas.width, canvas.height);
+  const data = imageData.data;
+  const f = isCurrentF0 ? f0 : f1;
 
-	ctx.beginPath();
-	ctx.moveTo(fromX, fromY);
-	ctx.lineTo(toX, toY);
-	ctx.lineTo(
-		toX - headLength * Math.cos(angle - Math.PI / 6),
-		toY - headLength * Math.sin(angle - Math.PI / 6)
-	);
-	ctx.moveTo(toX, toY);
-	ctx.lineTo(
-		toX - headLength * Math.cos(angle + Math.PI / 6),
-		toY - headLength * Math.sin(angle + Math.PI / 6)
-	);
-	ctx.stroke();
+  let rho, ux, uy, speed, vorticity;
+
+  for (let x = 0; x < cols; x++) {
+    for (let y = 0; y < rows; y++) {
+      const obs = obstacle[x * rows + y];
+      const i = idx(x, y);
+      const px = x * cellSize;
+      const py = y * cellSize;
+
+      if (obs) {
+        const col = [40, 40, 40, 255];
+        for (let dx = 0; dx < cellSize; dx++) {
+          for (let dy = 0; dy < cellSize; dy++) {
+            const p = ((py + dy) * canvas.width + (px + dx)) * 4;
+            data[p] = col[0]; data[p+1] = col[1]; data[p+2] = col[2]; data[p+3] = col[3];
+          }
+        }
+        continue;
+      }
+
+      // Compute macros
+      rho = ux = uy = 0;
+      for (let k = 0; k < 9; k++) {
+        const fk = f[i + k];
+        rho += fk;
+        ux += fk * C[k][0];
+        uy += fk * C[k][1];
+      }
+      ux /= rho;
+      uy /= rho;
+      speed = Math.hypot(ux, uy);
+
+      // Vorticity (central difference)
+      if (x > 0 && x < cols-1 && y > 0 && y < rows-1) {
+        const ux_left = f[idx(x-1,y)] + f[idx(x-1,y)+1] - f[idx(x-1,y)+3] || 0;
+        const ux_right = f[idx(x+1,y)] + f[idx(x+1,y)+1] - f[idx(x+1,y)+3] || 0;
+        const uy_bottom = f[idx(x,y-1)] + f[idx(x,y-1)+2] - f[idx(x,y-1)+4] || 0;
+        const uy_top = f[idx(x,y+1)] + f[idx(x,y+1)+2] - f[idx(x,y+1)+4] || 0;
+        vorticity = ((uy_top - uy_bottom) - (ux_right - ux_left)) * 0.1;
+      } else {
+        vorticity = 0;
+      }
+
+      let r = 0, g = 0, b = 0;
+      let count = 0;
+
+      for (const mode of visualizations) {
+        let color;
+        if (mode === "velocity") {
+          const hue = (Math.atan2(uy, ux) + Math.PI) / (2 * Math.PI);
+          color = hsvToRgb(hue, 0.9, Math.min(speed * 80, 1));
+        } else if (mode === "density") {
+          const d = (rho - 1) * 300;
+          if (d > 0) color = [255, 100 + d, 100 + d];
+          else color = [100 - d, 100 - d, 255];
+        } else if (mode === "vorticity") {
+          const v = Math.min(Math.abs(vorticity) * 15, 1);
+          if (vorticity > 0) color = [255 * v, 0, 100];
+          else color = [50, 100, 255 * v];
+        } else if (mode === "pressure") {
+          const p = rho * (1/3);
+          const val = Math.min((p - 0.333) * 3000, 1);
+          color = val > 0 ? [255, 200, 200 + val*55] : [200 + val*55, 200, 255];
+        }
+        if (color) {
+          r += color[0]; g += color[1]; b += color[2];
+          count++;
+        }
+      }
+
+      if (count === 0) [r, g, b] = [0, 0, 30];
+      else { r /= count; g /= count; b /= count; }
+
+      for (let dx = 0; dx < cellSize; dx++) {
+        for (let dy = 0; dy < cellSize; dy++) {
+          const p = ((py + dy) * canvas.width + (px + dx)) * 4;
+          data[p] = r; data[p+1] = g; data[p+2] = b; data[p+3] = 255;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // Vector field overlay
+  if (visualizations.has("vectorField")) {
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 1.5;
+    for (let x = 5; x < cols; x += vectorSpacing) {
+      for (let y = 5; y < rows; y += vectorSpacing) {
+        if (obstacle[x * rows + y]) continue;
+        const i = idx(x, y);
+        let ux = 0, uy = 0, rho = 0;
+        for (let k = 0; k < 9; k++) {
+          const fk = f[i + k];
+          rho += fk;
+          ux += fk * C[k][0];
+          uy += fk * C[k][1];
+        }
+        ux /= rho; uy /= rho;
+        const mag = Math.hypot(ux, uy);
+        if (mag < 0.001) continue;
+
+        const scale = cellSize * vectorSpacing * 0.8;
+        const x0 = x * cellSize + cellSize / 2;
+        const y0 = y * cellSize + cellSize / 2;
+        const x1 = x0 + ux * scale;
+        const y1 = y0 + uy * scale;
+
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        const angle = Math.atan2(y1 - y0, x1 - x0);
+        ctx.lineTo(x1 - 6 * Math.cos(angle - 0.5), y1 - 6 * Math.sin(angle - 0.5));
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1 - 6 * Math.cos(angle + 0.5), y1 - 6 * Math.sin(angle + 0.5));
+        ctx.stroke();
+      }
+    }
+  }
 }
 
-function loop() {
-	if (!isPaused) {
-		collideAndStream();
-	}
-	requestAnimationFrame(loop);
-}
+// Mouse handlers
+canvas.addEventListener("mousemove", e => {
+  const rect = canvas.getBoundingClientRect();
+  const gx = Math.floor((e.clientX - rect.left) / cellSize);
+  const gy = Math.floor((e.clientY - rect.top) / cellSize);
 
-window.addEventListener("resize", () => {
-	resizeSimulation();
+  if (gx >= 0 && gx < cols && gy >= 0 && gy < rows) {
+    mouse.x = gx;
+    mouse.y = gy;
+
+    if (mouse.rightDown && prevMouseGrid) {
+      drawObstacleLine(prevMouseGrid.x, prevMouseGrid.y, gx, gy);
+    }
+    prevMouseGrid = { x: gx, y: gy };
+  }
 });
 
-resetSimulation();
+canvas.addEventListener("mousedown", e => {
+  if (e.button === 0) {
+    mouse.down = true;
+    const dx = e.movementX, dy = e.movementY;
+    mouse.vx = dx * 0.01;
+    mouse.vy = dy * 0.01;
+  } else if (e.button === 2) {
+    mouse.rightDown = true;
+    prevMouseGrid = mouse;
+  }
+  e.preventDefault();
+});
+
+canvas.addEventListener("mouseup", e => {
+  if (e.button === 0) mouse.down = false;
+  if (e.button === 2) {
+    mouse.rightDown = false;
+    prevMouseGrid = null;
+  }
+});
+
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+function drawObstacleLine(x0, y0, x1, y1) {
+  let dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  let dy = Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+
+  while (true) {
+    drawObstacleBrush(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x0 += sx; }
+    if (e2 < dx) { err += dx; y0 += sy; }
+  }
+}
+
+function drawObstacleBrush(x, y) {
+  const r = obstacleBrushRadius;
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dy = -r; dy <= r; dy++) {
+      if (dx*dx + dy*dy <= r*r) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+          obstacle[nx * rows + ny] = 1;
+        }
+      }
+    }
+  }
+}
+
+// UI Listeners
+document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+  cb.addEventListener("change", () => {
+    visualizations = new Set(
+      Array.from(document.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(c => c.id.replace("visualization-", ""))
+    );
+  });
+});
+
+ui.viscosity.addEventListener("input", e => { tau = +e.target.value; omega = 1/tau; });
+ui.forceStrength.addEventListener("input", e => forceStrength = +e.target.value);
+ui.brushSize.addEventListener("input", e => brushRadius = +e.target.value);
+ui.obstacleBrushSize.addEventListener("input", e => obstacleBrushRadius = +e.target.value);
+ui.vectorSpacing.addEventListener("input", e => vectorSpacing = +e.target.value);
+ui.cellSize.addEventListener("input", () => { initSimulation(); });
+ui.pauseResume.addEventListener("click", () => {
+  isPaused = !isPaused;
+  ui.pauseResume.textContent = isPaused ? "Resume" : "Pause";
+});
+
+document.getElementById("reset").addEventListener("click", initSimulation);
+document.getElementById("clearObstacles").addEventListener("click", () => {
+  obstacle.fill(0);
+});
+
+// Resize handler
+window.addEventListener("resize", () => {
+  canvas.style.width = window.innerWidth + "px";
+  canvas.style.height = window.innerHeight + "px";
+  initSimulation();
+});
+
+// Help modal (unchanged)
+document.getElementById("helpButton").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "block";
+  document.getElementById("helpOverlay").style.display = "block";
+});
+document.getElementById("closeHelp").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "none";
+  document.getElementById("helpOverlay").style.display = "none";
+});
+document.getElementById("helpOverlay").addEventListener("click", () => {
+  document.getElementById("helpModal").style.display = "none";
+  document.getElementById("helpOverlay").style.display = "none";
+});
+
+// Animation loop
+function loop() {
+  if (!isPaused) {
+    simulate();
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+// Start
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+canvas.style.width = "100vw";
+canvas.style.height = "100vh";
+
+initSimulation();
 loop();
